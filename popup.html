@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Intra42 DIY</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 260px;
+      min-height: 180px;
+      background: #141922;
+      color: #e8eaf0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #00babc 0%, #0096d6 100%);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header .logo {
+      font-size: 20px;
+    }
+
+    .header .title {
+      flex: 1;
+    }
+
+    .header .title h1 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.3px;
+    }
+
+    .header .title small {
+      font-size: 10px;
+      color: rgba(255,255,255,0.7);
+    }
+
+    .badge {
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    .section {
+      padding: 14px 16px;
+      border-bottom: 1px solid #252e3e;
+    }
+
+    .section:last-child {
+      border-bottom: none;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #7a8899;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #b0b8c4;
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3a4555;
+      flex-shrink: 0;
+    }
+
+    .dot.active { background: #00babc; box-shadow: 0 0 4px rgba(0,186,188,0.5); }
+    .dot.inactive { background: #555; }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 9px 12px;
+      background: linear-gradient(135deg, #1e2533, #252e3e);
+      color: #b0b8c4;
+      border: 1px solid #3a4555;
+      border-radius: 7px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 6px;
+    }
+
+    .btn:hover {
+      background: linear-gradient(135deg, #252e3e, #2e3a50);
+      border-color: #00babc;
+      color: #e8eaf0;
+    }
+
+    .btn:active { transform: scale(0.97); }
+
+    .btn.primary {
+      background: linear-gradient(135deg, #00babc, #0096d6);
+      border-color: transparent;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .btn.primary:hover {
+      background: linear-gradient(135deg, #00d2d4, #00aaee);
+      box-shadow: 0 2px 8px rgba(0,186,188,0.4);
+    }
+
+    .tip {
+      font-size: 10px;
+      color: #5a6878;
+      line-height: 1.4;
+      margin-top: 6px;
+    }
+
+    .tip strong { color: #00babc; }
+
+    footer {
+      padding: 8px 16px;
+      font-size: 10px;
+      color: #3a4555;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo">🎓</span>
+    <div class="title">
+      <h1>Intra42 DIY</h1>
+      <small>Personnalisation du calendrier</small>
+    </div>
+    <span class="badge" id="versionBadge">v1.0</span>
+  </div>
+
+  <div class="section">
+    <div class="section-label">État</div>
+    <div class="status-row">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Vérification...</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Navigation</div>
+    <button class="btn primary" id="openIntraBtn">
+      🌐 Ouvrir intra.42.fr
+    </button>
+    <p class="tip">Va sur ton <strong>profil</strong>, puis clique <strong>📥 Debug Data</strong> dans le widget injecté pour collecter les données.</p>
+  </div>
+
+  <div class="section">
+    <div class="section-label">À propos</div>
+    <p class="tip">
+      L'extension injecte un <strong>dropdown de période</strong> (1 sem → 24 mois)
+      dans la section logtime de ton profil intra.
+    </p>
+  </div>
+
+  <footer>Intra42 DIY — Phase 1 Bootstrap</footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

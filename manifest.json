@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Intra42 DIY",
+  "version": "1.0.0",
+  "description": "Customize intra.42.fr — attendance calendar period selector & debug data collector",
+  "permissions": [
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://intra.42.fr/*",
+    "https://*.intra.42.fr/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://intra.42.fr/*",
+        "https://*.intra.42.fr/*"
+      ],
+      "js": [
+        "injector.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "network-interceptor.js",
+        "content.js",
+        "styles.css"
+      ],
+      "matches": [
+        "https://intra.42.fr/*",
+        "https://*.intra.42.fr/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
