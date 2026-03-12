@@ -24,14 +24,22 @@
         "injector.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://intra.42.fr/*",
+        "https://*.intra.42.fr/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "network-interceptor.js",
-        "content.js",
-        "styles.css"
+        "network-interceptor.js"
       ],
       "matches": [
         "https://intra.42.fr/*",
