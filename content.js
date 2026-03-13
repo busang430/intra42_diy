@@ -1,499 +1,514 @@
-// content.js — Intra42 DIY v1.1.0 (ISOLATED world content script)
-// Injected directly by Chrome via manifest. Runs at document_idle.
-// Communicates with network-interceptor.js (MAIN world) via CustomEvents on window.
+// content.js — Intra42 DIY v1.3.0 (ISOLATED world content script)
+// Logtime widget + calendar extension using native #user-locations SVG
 
 (function () {
-    'use strict';
+  'use strict';
 
-    if (window.__intra42DIY_content) return;
-    window.__intra42DIY_content = true;
+  if (window.__intra42DIY_content) return;
+  window.__intra42DIY_content = true;
 
-    // =============================================
-    // Config
-    // =============================================
-    const VERSION = '1.1.0';
-    const WIDGET_ID = 'intra42diy-widget';
+  const VERSION = '1.3.0';
+  const WIDGET_ID = 'intra42diy-widget';
 
-    const PERIOD_OPTIONS = [
-        { label: '1 Semaine', days: 7 },
-        { label: '1 Mois', days: 30 },
-        { label: '2 Mois', days: 60 },
-        { label: '3 Mois', days: 90 },
-        { label: '6 Mois', days: 180 },
-        { label: '12 Mois', days: 365 },
-        { label: '18 Mois', days: 548 },
-        { label: '24 Mois', days: 730 },
-    ];
+  const PERIOD_OPTIONS = [
+    { label: '1 Semaine', days: 7 },
+    { label: '1 Mois', days: 30 },
+    { label: '2 Mois', days: 60 },
+    { label: '3 Mois', days: 90 },
+    { label: '6 Mois', days: 180 },
+    { label: '12 Mois', days: 365 },
+    { label: '18 Mois', days: 548 },
+    { label: '24 Mois', days: 730 },
+  ];
 
-    let logs = [];
-    let apiCaptures = [];
-    let selectedPeriodDays = 30;
+  let logs = [];
+  let apiCaptures = [];
+  let selectedPeriodDays = 30;
+  let logtimeStats = null;
 
-    // =============================================
-    // Logger
-    // =============================================
-    function log(level, msg, data) {
-        const entry = {
-            time: new Date().toISOString(), level, msg,
-            data: data !== undefined ? String(JSON.stringify(data)).substring(0, 1000) : null
-        };
-        logs.push(entry);
-        if (logs.length > 300) logs = logs.slice(-250);
-        console.log(`[Intra42 DIY v${VERSION}] [${level}] ${msg}`, data !== undefined ? data : '');
+  // =============================================
+  // Logger
+  // =============================================
+  function log(level, msg, data) {
+    const entry = {
+      time: new Date().toISOString(), level, msg,
+      data: data !== undefined ? String(JSON.stringify(data)).substring(0, 500) : null
+    };
+    logs.push(entry);
+    if (logs.length > 200) logs = logs.slice(-180);
+    console.log(`[Intra42 DIY v${VERSION}] [${level}] ${msg}`, data !== undefined ? data : '');
+  }
+
+  log('info', `=== Intra42 DIY v${VERSION} started ===`);
+
+  // =============================================
+  // Collect API captures from network-interceptor.js (MAIN world)
+  // =============================================
+  window.addEventListener('intra42diy_api_capture', (e) => {
+    if (!e || !e.detail) return;
+    apiCaptures.push(e.detail);
+    if (apiCaptures.length > 200) apiCaptures.shift();
+
+    const url = e.detail.url || '';
+    const body = e.detail.body;
+
+    if (url.includes('locations_stats') && body && typeof body === 'object') {
+      logtimeStats = body;
+      log('info', `✅ locations_stats captured: ${Object.keys(body).length} days`);
+      scheduleUpdate();
     }
+  });
 
-    log('info', `=== Intra42 DIY v${VERSION} started (ISOLATED world) ===`);
-    log('info', `URL: ${location.href}`);
+  // =============================================
+  // Parse "HH:MM:SS" → seconds
+  // =============================================
+  function parseTimeToSeconds(str) {
+    if (!str || str === '00:00:00') return 0;
+    const parts = str.split(':').map(Number);
+    if (parts.length !== 3) return 0;
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
 
-    // =============================================
-    // Listen for API captures from MAIN world (network-interceptor.js)
-    // CustomEvents cross world-boundary via window
-    // =============================================
-    window.addEventListener('intra42diy_api_capture', (e) => {
-        if (e && e.detail) {
-            apiCaptures.push(e.detail);
-            if (apiCaptures.length > 200) apiCaptures.shift();
-            log('info', `[API] ${e.detail.type} ${e.detail.url} → ${e.detail.status}`);
-            // Update hours display whenever new data arrives
-            scheduleHoursUpdate();
-        }
-    });
+  // =============================================
+  // Format seconds → "Xh YYm"
+  // =============================================
+  function formatSeconds(totalSec) {
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    if (h === 0) return `${m}m`;
+    return m > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${h}h`;
+  }
 
-    // =============================================
-    // Inject inline styles (no external file load needed in isolated world)
-    // =============================================
-    function injectStyles() {
-        if (document.getElementById('intra42diy-styles')) return;
-        const style = document.createElement('style');
-        style.id = 'intra42diy-styles';
-        style.textContent = `
+  // =============================================
+  // Compute total hours for selected period
+  // =============================================
+  function computeHoursForPeriod(days) {
+    if (!logtimeStats) return null;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setHours(0, 0, 0, 0);
+    let totalSec = 0, dayCount = 0, activeDays = 0;
+    for (const [dateStr, timeStr] of Object.entries(logtimeStats)) {
+      const date = new Date(dateStr + 'T00:00:00');
+      if (date >= cutoff) {
+        const secs = parseTimeToSeconds(timeStr);
+        totalSec += secs;
+        dayCount++;
+        if (secs > 0) activeDays++;
+      }
+    }
+    return { totalSec, dayCount, activeDays };
+  }
+
+  // =============================================
+  // Inline styles
+  // =============================================
+  function injectStyles() {
+    if (document.getElementById('intra42diy-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'intra42diy-styles';
+    style.textContent = `
       #intra42diy-widget {
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin: 10px 0 6px 0;
+        gap: 6px;
+        margin: 6px 0 10px 0;
         flex-wrap: wrap;
-        font-family: 'Nunito', 'Roboto', system-ui, sans-serif;
-      }
-      #intra42diy-label {
-        font-size: 11px;
-        font-weight: 700;
-        color: #7a8899;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
+        font-family: inherit;
       }
       #intra42diy-period-select {
-        background: #1a2236;
-        color: #e0e6f0;
-        border: 1px solid #2e3d55;
+        background: rgba(255,255,255,0.06);
+        color: #cdd5e0;
+        border: 1px solid rgba(255,255,255,0.15);
         border-radius: 5px;
-        padding: 4px 24px 4px 8px;
+        padding: 3px 22px 3px 8px;
         font-size: 12px;
         font-family: inherit;
         cursor: pointer;
         outline: none;
-        transition: border-color .2s, box-shadow .2s;
-        min-width: 110px;
+        transition: border-color .2s;
         appearance: none;
         -webkit-appearance: none;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath fill='%23888' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
         background-repeat: no-repeat;
-        background-position: right 7px center;
+        background-position: right 6px center;
+        min-width: 100px;
       }
-      #intra42diy-period-select:hover,
-      #intra42diy-period-select:focus {
-        border-color: #00babc;
-        box-shadow: 0 0 0 2px rgba(0,186,188,.18);
-      }
-      #intra42diy-period-select option {
-        background: #1a2236;
-      }
+      #intra42diy-period-select:hover { border-color: #00babc; }
+      #intra42diy-period-select option { background: #1a2236; color: #e0e6f0; }
       #intra42diy-hours-badge {
-        font-size: 11px;
-        font-weight: 600;
-        color: #00babc;
-        padding: 3px 8px;
-        background: rgba(0,186,188,.1);
-        border: 1px solid rgba(0,186,188,.3);
-        border-radius: 4px;
-        display: none;
+        font-size: 12px; font-weight: 700; color: #00babc;
+        padding: 2px 8px;
+        background: rgba(0,186,188,.12);
+        border: 1px solid rgba(0,186,188,.35);
+        border-radius: 4px; display: none; white-space: nowrap;
       }
       #intra42diy-hours-badge.show { display: inline-block; }
+      #intra42diy-sub {
+        font-size: 10px; color: #7a8899; display: none; white-space: nowrap;
+      }
+      #intra42diy-sub.show { display: inline-block; }
       #intra42diy-debug-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: #1a2236;
-        color: #7a8899;
-        border: 1px solid #2e3d55;
-        border-radius: 5px;
-        padding: 4px 9px;
-        font-size: 11px;
-        font-family: inherit;
-        cursor: pointer;
-        transition: all .18s;
-        white-space: nowrap;
+        display: inline-flex; align-items: center; gap: 4px;
+        background: rgba(255,255,255,0.04); color: #5a6878;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 5px; padding: 3px 8px; font-size: 10px;
+        font-family: inherit; cursor: pointer; transition: all .18s;
+        white-space: nowrap; margin-left: auto;
       }
-      #intra42diy-debug-btn:hover {
-        border-color: #00babc;
-        color: #e0e6f0;
-        background: #1e2d45;
-      }
-      #intra42diy-debug-btn:active { transform: scale(.96); }
-      #intra42diy-status {
-        font-size: 10px;
-        color: #4a5a70;
-        font-style: italic;
-      }
+      #intra42diy-debug-btn:hover { border-color: #00babc; color: #e0e6f0; }
     `;
-        document.head.appendChild(style);
-        log('info', 'Styles injected');
+    document.head.appendChild(style);
+  }
+
+  // =============================================
+  // Find the LOGTIME container
+  // =============================================
+  function findLogtimeContainer() {
+    const h4s = document.querySelectorAll('h4.profile-title');
+    for (const h4 of h4s) {
+      if (/^\s*logtime\s*$/i.test(h4.textContent)) return h4.parentElement;
+    }
+    const headings = document.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    for (const h of headings) {
+      if (/^\s*logtime\s*$/i.test(h.textContent)) return h.parentElement;
+    }
+    const svg = document.getElementById('user-locations');
+    if (svg) return svg.closest('.container-inner-item') || svg.parentElement;
+    return null;
+  }
+
+  // =============================================
+  // Build and inject the widget
+  // =============================================
+  function injectWidget() {
+    if (document.getElementById(WIDGET_ID)) return;
+    injectStyles();
+    const container = findLogtimeContainer();
+    if (!container) { log('warn', 'Container not found'); return; }
+
+    const widget = document.createElement('div');
+    widget.id = WIDGET_ID;
+
+    const select = document.createElement('select');
+    select.id = 'intra42diy-period-select';
+    select.title = "Période d'historique à cumuler";
+    PERIOD_OPTIONS.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt.days;
+      o.textContent = opt.label;
+      if (opt.days === selectedPeriodDays) o.selected = true;
+      select.appendChild(o);
+    });
+    select.addEventListener('change', () => {
+      selectedPeriodDays = parseInt(select.value, 10);
+      // Reset calendar guard so it redraws
+      const svg = document.getElementById('user-locations');
+      if (svg) svg.removeAttribute('data-diy-period');
+      log('info', `Period changed: ${selectedPeriodDays}d`);
+      scheduleUpdate();
+    });
+
+    const badge = document.createElement('span');
+    badge.id = 'intra42diy-hours-badge';
+
+    const sub = document.createElement('span');
+    sub.id = 'intra42diy-sub';
+
+    const btn = document.createElement('button');
+    btn.id = 'intra42diy-debug-btn';
+    btn.textContent = '📥 Debug';
+    btn.title = 'Télécharger les données de debug';
+    btn.addEventListener('click', downloadDebugData);
+
+    widget.appendChild(select);
+    widget.appendChild(badge);
+    widget.appendChild(sub);
+    widget.appendChild(btn);
+
+    const h4 = container.querySelector('h4.profile-title');
+    if (h4 && h4.parentNode === container) {
+      h4.insertAdjacentElement('afterend', widget);
+    } else if (h4) {
+      h4.parentElement.insertAdjacentElement('afterend', widget);
+    } else {
+      container.prepend(widget);
     }
 
-    // =============================================
-    // Find the LOGTIME section in the DOM
-    // Uses multiple strategies targeting intra.42.fr structure
-    // =============================================
-    function findLogtimeSection() {
-        // Strategy 1: Look for an element whose visible text starts with "LOGTIME"
-        const allEls = document.querySelectorAll('section, div, article, aside');
-        for (const el of allEls) {
-            // Check direct text node children (not all descendants, to avoid false positives)
-            const directText = Array.from(el.childNodes)
-                .filter(n => n.nodeType === Node.TEXT_NODE || n.nodeName.match(/^H[1-6]$|^SPAN$|^P$|^LABEL$/i))
-                .map(n => (n.textContent || '').trim())
-                .join(' ');
+    log('info', `✅ Widget injected into ${container.tagName}#${container.id}.${container.className.split(' ')[0]}`);
+    scheduleUpdate();
+  }
 
-            if (/^logtime$/i.test(directText.trim())) {
-                log('info', `Found LOGTIME section (text match): ${el.tagName}#${el.id}`);
-                return el;
-            }
+  // =============================================
+  // Extend the native #user-locations SVG calendar
+  //
+  // EXACT NATIVE COORDINATES (verified from DOM snapshot):
+  //   blockOriginX(m) = 162 + m * 144  (m=0: Dec, m=1: Jan, m=2: Feb, m=3: Mar)
+  //   month label x   = blockOriginX + 63
+  //   day rect x      = blockOriginX + col * 18  (col 0..6)
+  //   day rect y      = 40 + row * 18             (row 0..4)
+  //   native viewBox  = "150 0 600 200" (4 months)
+  // =============================================
+  function extendCalendar() {
+    if (!logtimeStats) return;
+
+    const nativeSvg = document.getElementById('user-locations');
+    if (!nativeSvg) { log('warn', '#user-locations not found yet'); return; }
+
+    // Don't rebuild if already done for this period
+    if (nativeSvg.getAttribute('data-diy-period') === String(selectedPeriodDays)) return;
+    nativeSvg.setAttribute('data-diy-period', String(selectedPeriodDays));
+
+    const CELL = 18;
+    const MON_STRIDE = 144;
+    const NATIVE_MONTHS = 4;
+    const NATIVE_FIRST_BLOCK_X = 162; // x of Dec's col-0 in native SVG
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Oldest month to show
+    const targetStart = new Date(today);
+    targetStart.setDate(today.getDate() - selectedPeriodDays + 1);
+    targetStart.setDate(1);
+
+    // Total months to display
+    const totalMonths = Math.max(NATIVE_MONTHS,
+      (today.getFullYear() - targetStart.getFullYear()) * 12
+      + (today.getMonth() - targetStart.getMonth()) + 1
+    );
+    const extraMonths = totalMonths - NATIVE_MONTHS;
+
+    // The LAST month is always the current month.
+    // In native: last month index = 3 (Mar) → blockOriginX = 162 + 3*144 = 594
+    // When we add extra months, they go to the LEFT.
+    // So month index 0 (oldest) = last month - (totalMonths-1)
+    // blockOriginX(m) = nativeLastBlockX - (totalMonths-1-m) * MON_STRIDE
+    //                 = 594 - (totalMonths-1-m) * 144
+    const NATIVE_LAST_BLOCK_X = 162 + (NATIVE_MONTHS - 1) * MON_STRIDE; // = 594
+
+    // ViewBox: extend leftward for extra months
+    const newMinX = 150 - extraMonths * MON_STRIDE;
+    const newWidth = 600 + extraMonths * MON_STRIDE;
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    // 1. Clear existing SVG content
+    while (nativeSvg.firstChild) {
+      nativeSvg.removeChild(nativeSvg.firstChild);
+    }
+
+    // 2. Rebuild with proper createElementNS to keep SVG namespace intact
+    for (let m = 0; m < totalMonths; m++) {
+      const monthDate = new Date(targetStart.getFullYear(), targetStart.getMonth() + m, 1);
+      const curYear = monthDate.getFullYear();
+      const curMonth = monthDate.getMonth();
+      const daysInMonth = new Date(curYear, curMonth + 1, 0).getDate();
+
+      const blockOriginX = NATIVE_LAST_BLOCK_X - (totalMonths - 1 - m) * MON_STRIDE;
+      const labelX = blockOriginX + 63;
+
+      const title = document.createElementNS(svgNS, 'text');
+      title.setAttribute('x', labelX);
+      title.setAttribute('y', '20');
+      title.setAttribute('fill', '#999');
+      title.setAttribute('width', '126');
+      title.setAttribute('height', '126');
+      title.setAttribute('font-family', 'sans-serif');
+      title.setAttribute('font-size', '10');
+      title.textContent = monthNames[curMonth];
+      nativeSvg.appendChild(title);
+
+      let col = 0, row = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const boxDate = new Date(curYear, curMonth, d);
+        if (boxDate > today) break;
+
+        const dateStr = curYear + '-'
+          + String(curMonth + 1).padStart(2, '0') + '-'
+          + String(d).padStart(2, '0');
+
+        const timeStr = logtimeStats[dateStr] || '00:00:00';
+        const sec = parseTimeToSeconds(timeStr);
+        const hours = sec / 3600;
+
+        let fill = '#fafafa';
+        let textFill = '#ccc';
+        if (hours > 0) {
+          if (hours < 3) { fill = '#004b4c'; textFill = '#9dd'; }
+          else if (hours < 6) { fill = '#008183'; textFill = '#fff'; }
+          else if (hours < 9) { fill = '#00babc'; textFill = '#fff'; }
+          else { fill = '#1de9eb'; textFill = '#005'; }
         }
 
-        // Strategy 2: Find a heading or label with text "LOGTIME"
-        const headers = document.querySelectorAll('h1,h2,h3,h4,h5,h6,span,label,p,div');
-        for (const h of headers) {
-            const t = (h.textContent || '').trim();
-            if (/^logtime$/i.test(t) && t.length < 15) {
-                const parent = h.closest('section, article, .box, .panel, [class*="section"]') || h.parentElement;
-                log('info', `Found LOGTIME via header: ${h.tagName} → parent ${parent?.tagName}#${parent?.id}`);
-                return parent;
-            }
-        }
+        const hoverTitle = hours > 0 ? formatSeconds(sec).replace(' ', '') : '0h00';
+        const cx = blockOriginX + col * CELL;
+        const cy = 40 + row * CELL;
+        const textX = cx + (d < 10 ? 4.5 : 2.5);
+        const textY = cy + 11;
 
-        // Strategy 3: class/id heuristics
-        const heuristicSelectors = [
-            '[class*="logtime"]', '[id*="logtime"]',
-            '[class*="attendance"]', '[id*="attendance"]',
-            '[class*="location"]', '[id*="location"]',
-            '[class*="calendar"]', '[id*="calendar"]',
-        ];
-        for (const sel of heuristicSelectors) {
-            const el = document.querySelector(sel);
-            if (el) {
-                log('info', `Found logtime via heuristic selector: ${sel}`);
-                return el;
-            }
-        }
+        const g = document.createElementNS(svgNS, 'g');
+        g.setAttribute('data-toggle', 'tooltip');
+        g.setAttribute('data-original-title', hoverTitle);
 
-        // Strategy 4: Find a section that contains calendar-like content (month names)
-        const monthNames = /jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|déc|fév|avr|mai|août/i;
-        for (const el of allEls) {
-            const text = el.textContent || '';
-            const matches = (text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|déc|fév|avr|mai|août)\b/gi) || []).length;
-            if (matches >= 2 && el.querySelectorAll('td, th, [class*="day"]').length > 5) {
-                log('info', `Found calendar section via month names: ${el.tagName}#${el.id}`);
-                return el;
-            }
-        }
+        const rect = document.createElementNS(svgNS, 'rect');
+        rect.setAttribute('x', cx);
+        rect.setAttribute('y', cy);
+        rect.setAttribute('width', '18');
+        rect.setAttribute('height', '18');
+        rect.setAttribute('stroke', '#fff');
+        rect.setAttribute('stroke-width', '2');
+        rect.setAttribute('fill', fill);
 
-        log('warn', 'Could not find logtime section. Dumping all sections for debug:');
-        allEls.forEach((el, i) => {
-            if (i < 30) log('debug', `Section[${i}]: ${el.tagName}#${el.id}.${el.className.substring(0, 40)}`);
-        });
+        const text = document.createElementNS(svgNS, 'text');
+        text.setAttribute('x', textX);
+        text.setAttribute('y', textY);
+        text.setAttribute('fill', textFill);
+        text.setAttribute('width', '18');
+        text.setAttribute('height', '18');
+        text.setAttribute('font-family', 'sans-serif');
+        text.setAttribute('font-size', '9');
+        text.textContent = d;
 
-        return null;
+        g.appendChild(rect);
+        g.appendChild(text);
+        nativeSvg.appendChild(g);
+
+        col++;
+        if (col > 6) { col = 0; row++; }
+      }
     }
 
-    // =============================================
-    // Build and inject the widget
-    // =============================================
-    function injectWidget() {
-        if (document.getElementById(WIDGET_ID)) return;
+    nativeSvg.setAttribute('viewBox', `${newMinX} 0 ${newWidth} 200`);
+    log('info', `✅ Calendar: ${totalMonths} months, viewBox="${newMinX} 0 ${newWidth} 200"`);
 
-        injectStyles();
+    try {
+      if (window.jQuery) window.jQuery(nativeSvg).find('[data-toggle="tooltip"]').tooltip();
+    } catch (e) { }
+  }
 
-        const target = findLogtimeSection();
-        if (!target) {
-            log('warn', 'No logtime section found on this page — widget not injected');
-            return;
-        }
+  // =============================================
+  // Update hours badge + calendar
+  // =============================================
+  let updateTimer = null;
+  function scheduleUpdate() {
+    clearTimeout(updateTimer);
+    updateTimer = setTimeout(doUpdate, 300);
+  }
 
-        const widget = document.createElement('div');
-        widget.id = WIDGET_ID;
+  function doUpdate() {
+    const badge = document.getElementById('intra42diy-hours-badge');
+    const sub = document.getElementById('intra42diy-sub');
+    if (!badge || !logtimeStats) return;
 
-        // Label
-        const label = document.createElement('span');
-        label.id = 'intra42diy-label';
-        label.textContent = '📅';
+    const result = computeHoursForPeriod(selectedPeriodDays);
+    if (!result) return;
 
-        // Dropdown
-        const select = document.createElement('select');
-        select.id = 'intra42diy-period-select';
-        select.title = 'Choisir la période d\'historique';
-        PERIOD_OPTIONS.forEach(opt => {
-            const o = document.createElement('option');
-            o.value = opt.days;
-            o.textContent = opt.label;
-            if (opt.days === selectedPeriodDays) o.selected = true;
-            select.appendChild(o);
-        });
-        select.addEventListener('change', () => {
-            selectedPeriodDays = parseInt(select.value, 10);
-            log('info', `Period changed to ${selectedPeriodDays} days`);
-            updateHoursDisplay();
-        });
+    const { totalSec, dayCount, activeDays } = result;
+    const label = PERIOD_OPTIONS.find(o => o.days === selectedPeriodDays)?.label || `${selectedPeriodDays}j`;
 
-        // Hours badge
-        const badge = document.createElement('span');
-        badge.id = 'intra42diy-hours-badge';
-
-        // Status
-        const status = document.createElement('span');
-        status.id = 'intra42diy-status';
-        status.textContent = '⏳ attente données…';
-
-        // Debug button
-        const btn = document.createElement('button');
-        btn.id = 'intra42diy-debug-btn';
-        btn.innerHTML = '📥 Debug';
-        btn.title = 'Télécharger les données de debug pour analyse';
-        btn.addEventListener('click', downloadDebugData);
-
-        widget.appendChild(label);
-        widget.appendChild(select);
-        widget.appendChild(badge);
-        widget.appendChild(status);
-        widget.appendChild(btn);
-
-        // Insert: try after first heading, else prepend
-        const heading = target.querySelector('h1,h2,h3,h4,h5,h6');
-        if (heading && heading.parentNode === target) {
-            heading.insertAdjacentElement('afterend', widget);
-        } else if (heading) {
-            heading.parentElement.insertAdjacentElement('afterend', widget);
-        } else {
-            target.prepend(widget);
-        }
-
-        log('info', `✅ Widget injected into ${target.tagName}#${target.id}.${target.className.substring(0, 30)}`);
-
-        // Capture DOM snapshot for debug
-        captureDOM(target);
+    badge.textContent = `⏱ ${formatSeconds(totalSec)}`;
+    badge.classList.add('show');
+    if (sub) {
+      sub.textContent = `${activeDays} jours actifs / ${dayCount} jours`;
+      sub.classList.add('show');
     }
 
-    // =============================================
-    // Hours computation
-    // =============================================
-    let hoursUpdateTimer = null;
-    function scheduleHoursUpdate() {
-        clearTimeout(hoursUpdateTimer);
-        hoursUpdateTimer = setTimeout(updateHoursDisplay, 500);
-    }
+    log('info', `${label}: ${formatSeconds(totalSec)} | ${activeDays}/${dayCount} jours actifs`);
+    extendCalendar();
+  }
 
-    function updateHoursDisplay() {
-        const badge = document.getElementById('intra42diy-hours-badge');
-        const status = document.getElementById('intra42diy-status');
-
-        if (!badge) return;
-
-        // Collect all location/logtime records
-        let allRecords = [];
-        apiCaptures.forEach(cap => {
-            const body = cap.body;
-            if (Array.isArray(body)) {
-                allRecords = allRecords.concat(body);
-            } else if (body && Array.isArray(body.data)) {
-                allRecords = allRecords.concat(body.data);
-            }
-        });
-
-        // Filter records that look like location objects (have begin_at)
-        const locationRecords = allRecords.filter(r =>
-            r && (r.begin_at || r.beginAt) && typeof r === 'object'
-        );
-
-        if (locationRecords.length === 0) {
-            if (status) status.textContent = `⏳ ${apiCaptures.length} API calls, 0 sessions`;
-            return;
-        }
-
-        // Filter by period
-        const cutoff = new Date(Date.now() - selectedPeriodDays * 86400000);
-        const filtered = locationRecords.filter(r => {
-            const begin = new Date(r.begin_at || r.beginAt);
-            return begin >= cutoff;
-        });
-
-        // Sum durations
-        let totalMs = 0;
-        filtered.forEach(r => {
-            const begin = new Date(r.begin_at || r.beginAt).getTime();
-            const end = r.end_at
-                ? new Date(r.end_at || r.endAt).getTime()
-                : Date.now();
-            if (!isNaN(begin) && !isNaN(end) && end > begin) {
-                totalMs += end - begin;
-            }
-        });
-
-        const hrs = (totalMs / 3600000).toFixed(1);
-        const period = PERIOD_OPTIONS.find(o => o.days === selectedPeriodDays);
-
-        badge.textContent = `⏱ ${hrs}h`;
-        badge.classList.add('show');
-        if (status) status.textContent = `${filtered.length} sessions sur ${period?.label}`;
-
-        log('info', `Hours: ${hrs}h over ${filtered.length}/${locationRecords.length} sessions (period: ${selectedPeriodDays}d)`);
-    }
-
-    // =============================================
-    // DOM snapshot
-    // =============================================
-    let domSnapshots = [];
-    function captureDOM(el) {
-        try {
-            domSnapshots.push({
-                timestamp: new Date().toISOString(),
-                url: location.href,
-                tagName: el.tagName,
-                id: el.id,
-                className: el.className,
-                outerHTML: el.outerHTML.substring(0, 20000),
-            });
-            if (domSnapshots.length > 3) domSnapshots.shift();
-        } catch (_) { }
-    }
-
-    // =============================================
-    // Debug data download
-    // =============================================
-    function downloadDebugData() {
-        log('info', 'Debug download initiated');
-
-        // Full body snapshot (for finding selectors)
-        let bodySnapshot = '';
-        try {
-            bodySnapshot = document.body.innerHTML.substring(0, 100000);
-        } catch (_) { }
-
-        // All class names and IDs on page
-        const allClasses = Array.from(new Set(
-            Array.from(document.querySelectorAll('[class]'))
-                .flatMap(el => Array.from(el.classList))
-        )).sort().slice(0, 1000);
-
-        const allIds = Array.from(document.querySelectorAll('[id]'))
-            .map(el => el.id).filter(Boolean).slice(0, 300);
-
-        // Key selector checks
-        const selectorChecks = {};
-        [
-            '.logtime', '[class*="logtime"]', '[id*="logtime"]',
-            '.calendar', '[class*="calendar"]', '[class*="attendance"]',
-            '.location', '[class*="location"]', 'canvas', 'table',
-            'section', '.box', '.panel', '[ng-controller]', '[data-ng-controller]'
-        ].forEach(sel => {
-            selectorChecks[sel] = document.querySelectorAll(sel).length;
-        });
-
-        const exportData = {
-            meta: {
-                extension: `Intra42 DIY v${VERSION}`,
-                exportTime: new Date().toISOString(),
-                url: location.href,
-                title: document.title,
-            },
-            user: getUserLogin(),
-            selectorChecks,
-            allClasses,
-            allIds,
-            domSnapshots,
-            bodySnapshot,
-            apiCaptures,
-            logs,
-        };
-
-        const json = JSON.stringify(exportData, null, 2);
-        const blob = new Blob([json], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `intra42diy_debug_${Date.now()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-
-        const status = document.getElementById('intra42diy-status');
-        if (status) status.textContent = `✅ Debug téléchargé (${apiCaptures.length} API, ${(json.length / 1024).toFixed(0)}KB)`;
-
-        log('info', `Downloaded: ${(json.length / 1024).toFixed(1)}KB, ${apiCaptures.length} captures`);
-    }
-
-    // =============================================
-    // Helpers
-    // =============================================
-    function getUserLogin() {
-        const fromAttr = document.querySelector('[data-login]');
-        if (fromAttr) return fromAttr.getAttribute('data-login');
-        const urlMatch = location.href.match(/\/users\/([a-z0-9_-]+)/i);
-        if (urlMatch) return urlMatch[1];
-        return 'unknown';
-    }
-
-    // =============================================
-    // MutationObserver — re-inject on SPA navigation
-    // =============================================
-    function startObserver() {
-        let timer = null;
-        const obs = new MutationObserver(() => {
-            clearTimeout(timer);
-            timer = setTimeout(() => {
-                if (!document.getElementById(WIDGET_ID)) {
-                    log('info', 'Widget lost, re-injecting...');
-                    injectWidget();
-                }
-            }, 600);
-        });
-        obs.observe(document.body, { childList: true, subtree: true });
-        log('info', 'MutationObserver started');
-    }
-
-    // =============================================
-    // Entry point with retry
-    // =============================================
-    let retryCount = 0;
-    function tryInject() {
-        injectWidget();
-        if (!document.getElementById(WIDGET_ID) && retryCount < 15) {
-            retryCount++;
-            log('info', `Retry ${retryCount}/15 in 1s...`);
-            setTimeout(tryInject, 1000);
-        }
-    }
-
-    tryInject();
-    startObserver();
-
-    // Expose debug handle in the page's window
-    window.intra42DIY = {
-        version: VERSION,
-        getLogs: () => logs,
-        getCaptures: () => apiCaptures,
-        downloadDebug: downloadDebugData,
-        reinject: () => { document.getElementById(WIDGET_ID)?.remove(); tryInject(); },
+  // =============================================
+  // Debug data download
+  // =============================================
+  function downloadDebugData() {
+    const exportData = {
+      meta: { extension: `Intra42 DIY v${VERSION}`, exportTime: new Date().toISOString(), url: location.href },
+      user: getUserLogin(),
+      logtimeStats,
+      apiCaptures,
+      logs,
+      domSnapshot: (() => {
+        const c = findLogtimeContainer();
+        return c ? c.outerHTML.substring(0, 20000) : null;
+      })(),
+      selectorChecks: {
+        'h4.profile-title[text=Logtime]': (() => {
+          const h4s = document.querySelectorAll('h4.profile-title');
+          return Array.from(h4s).filter(h => /logtime/i.test(h.textContent)).length;
+        })(),
+        '#user-locations': !!document.getElementById('user-locations'),
+        '#intra42diy-widget': !!document.getElementById(WIDGET_ID),
+      }
     };
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `intra42diy_debug_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    log('info', `Debug downloaded: ${(json.length / 1024).toFixed(1)}KB`);
+  }
 
-    log('info', '✅ Init complete. Use window.intra42DIY in console to debug.');
+  function getUserLogin() {
+    const el = document.querySelector('[data-login]');
+    if (el) return el.getAttribute('data-login');
+    const m = location.href.match(/\/users\/([a-z0-9_-]+)/i);
+    return m ? m[1] : 'unknown';
+  }
+
+  // =============================================
+  // MutationObserver — re-inject on SPA navigation
+  // =============================================
+  function startObserver() {
+    let timer = null;
+    const obs = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!document.getElementById(WIDGET_ID)) {
+          log('info', 'Widget missing, re-injecting...');
+          injectWidget();
+        }
+      }, 500);
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // =============================================
+  // Entry point with retry
+  // =============================================
+  let retries = 0;
+  function tryInject() {
+    injectWidget();
+    if (!document.getElementById(WIDGET_ID) && retries < 20) {
+      retries++;
+      setTimeout(tryInject, 800);
+    }
+  }
+
+  tryInject();
+  startObserver();
+
+  window.intra42DIY = {
+    version: VERSION,
+    getStats: () => logtimeStats,
+    getLogs: () => logs,
+    getCaptures: () => apiCaptures,
+    download: downloadDebugData,
+    reinject: () => {
+      document.getElementById(WIDGET_ID)?.remove();
+      const svg = document.getElementById('user-locations');
+      if (svg) svg.removeAttribute('data-diy-period');
+      retries = 0;
+      tryInject();
+    },
+  };
+
+  log('info', '✅ Init complete. Debug: window.intra42DIY');
 
 })();
